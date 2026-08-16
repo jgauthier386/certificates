@@ -838,7 +838,7 @@ func deviceAttest01Validate(ctx context.Context, ch *Challenge, db DB, jwk *jose
 	format := att.Format
 	prov := MustProvisionerFromContext(ctx)
 	if !prov.IsAttestationFormatEnabled(ctx, provisioner.ACMEAttestationFormat(format)) {
-		if format != "apple" && format != "step" && format != "tpm" {
+		if format != "apple" && format != "step" && format != "tpm" && format != "android-key" {
 			return storeError(ctx, db, ch, true, NewDetailedError(ErrorBadAttestationStatementType, "unsupported attestation object format %q", format))
 		}
 
@@ -935,6 +935,34 @@ func deviceAttest01Validate(ctx context.Context, ch *Challenge, db DB, jwk *jose
 				ErrorRejectedIdentifierType,
 				Identifier{Type: "permanent-identifier", Value: ch.Value},
 				"challenge identifier %q doesn't match any of the attested hardware identifiers %q", ch.Value, data.PermanentIdentifiers,
+			)
+			return storeError(ctx, db, ch, true, NewDetailedError(ErrorBadAttestationStatementType, "permanent identifier does not match").AddSubproblems(subproblem))
+		}
+
+		// Update attestation key fingerprint to compare against the CSR
+		az.Fingerprint = data.Fingerprint
+
+	case "android-key":
+		data, err := doAndroidKeyAttestationFormat(ctx, prov, ch, jwk, &att)
+		if err != nil {
+			var acmeError *Error
+			if errors.As(err, &acmeError) {
+				if acmeError.Status == 500 {
+					return acmeError
+				}
+				return storeError(ctx, db, ch, true, acmeError)
+			}
+			return WrapErrorISE(err, "error validating attestation")
+		}
+
+		// The attested key's fingerprint is the device identifier of this
+		// format (Android exposes no hardware serial to unprivileged apps):
+		// it must match the challenged Order value and, later, the CSR key.
+		if data.Fingerprint != ch.Value {
+			subproblem := NewSubproblemWithIdentifier(
+				ErrorRejectedIdentifierType,
+				Identifier{Type: "permanent-identifier", Value: ch.Value},
+				"challenge identifier %q doesn't match the attested key fingerprint %q", ch.Value, data.Fingerprint,
 			)
 			return storeError(ctx, db, ch, true, NewDetailedError(ErrorBadAttestationStatementType, "permanent identifier does not match").AddSubproblems(subproblem))
 		}

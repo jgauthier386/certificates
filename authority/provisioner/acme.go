@@ -64,6 +64,13 @@ const (
 
 	// TPM is the format used to enable device-attest-01 with TPMs.
 	TPM ACMEAttestationFormat = "tpm"
+
+	// ANDROID_KEY is the format used to enable device-attest-01 on Android
+	// devices with a hardware-backed keystore (e.g. StrongBox), as described
+	// by the WebAuthn attestation statement format of the same name. It is
+	// never enabled by default: it requires the provisioner's attestation
+	// roots to be configured with Google's key attestation roots.
+	ANDROID_KEY ACMEAttestationFormat = "android-key"
 )
 
 // String returns a normalized version of the attestation format.
@@ -74,7 +81,7 @@ func (f ACMEAttestationFormat) String() string {
 // Validate returns an error if the attestation format is not a valid one.
 func (f ACMEAttestationFormat) Validate() error {
 	switch ACMEAttestationFormat(f.String()) {
-	case APPLE, STEP, TPM:
+	case APPLE, STEP, TPM, ANDROID_KEY:
 		return nil
 	default:
 		return fmt.Errorf("acme attestation format %q is not supported", f)
