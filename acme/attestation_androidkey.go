@@ -76,7 +76,15 @@ type androidKeyAttestationData struct {
 //   - the attStmt sig must be a valid signature over
 //     SHA-256(keyAuthorization) by the attested key, binding the attestation
 //     to this ACME account and challenge token.
-func doAndroidKeyAttestationFormat(_ context.Context, prov Provisioner, ch *Challenge, jwk *jose.JSONWebKey, att *attestationObject) (*androidKeyAttestationData, error) {
+func doAndroidKeyAttestationFormat(ctx context.Context, prov Provisioner, ch *Challenge, jwk *jose.JSONWebKey, att *attestationObject) (*androidKeyAttestationData, error) {
+	return doAndroidKeyAttestationFormatAt(ctx, prov, ch, jwk, att, time.Now().Truncate(time.Second))
+}
+
+// doAndroidKeyAttestationFormatAt exists so captured certificate fixtures can
+// be verified at their capture time after their short-lived leaf expires.
+// Production callers always enter through doAndroidKeyAttestationFormat and
+// therefore validate against the real current time.
+func doAndroidKeyAttestationFormatAt(_ context.Context, prov Provisioner, ch *Challenge, jwk *jose.JSONWebKey, att *attestationObject, currentTime time.Time) (*androidKeyAttestationData, error) {
 	// Unlike the step format (built-in Yubico roots), android-key has no
 	// embedded default: the operator must configure Google's key attestation
 	// roots explicitly on the provisioner.
@@ -116,7 +124,7 @@ func doAndroidKeyAttestationFormat(_ context.Context, prov Provisioner, ch *Chal
 	if _, err := leaf.Verify(x509.VerifyOptions{
 		Intermediates: intermediates,
 		Roots:         roots,
-		CurrentTime:   time.Now().Truncate(time.Second),
+		CurrentTime:   currentTime,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
 		return nil, WrapDetailedError(ErrorBadAttestationStatementType, err, "x5c is not valid")

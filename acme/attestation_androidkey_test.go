@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/stretchr/testify/require"
@@ -431,6 +432,27 @@ func mustParseCert(t *testing.T, der []byte) *x509.Certificate {
 	return cert
 }
 
+func attestationFixtureTime(t *testing.T, x5c []interface{}) time.Time {
+	t.Helper()
+	currentTime := time.Time{}
+	certificates := make([]*x509.Certificate, 0, len(x5c))
+	for _, value := range x5c {
+		der, ok := value.([]byte)
+		require.True(t, ok, "x5c fixture entry must contain DER bytes")
+		certificate := mustParseCert(t, der)
+		certificates = append(certificates, certificate)
+		if certificate.NotBefore.After(currentTime) {
+			currentTime = certificate.NotBefore
+		}
+	}
+	currentTime = currentTime.Add(time.Second)
+	for _, certificate := range certificates {
+		require.False(t, currentTime.After(certificate.NotAfter),
+			"x5c fixture certificates have no overlapping validity window")
+	}
+	return currentTime
+}
+
 func mustOtherRootPEM(t *testing.T) []byte {
 	t.Helper()
 	other, err := minica.New()
@@ -475,15 +497,18 @@ func TestDoAndroidKeyAttestationFormat_attObjFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "homelab-test-token.442P9fr8siV0ggQD4G7tiLYAWjvDvSka6tcXkN4IVOI", keyAuth)
 
-	got, err := doAndroidKeyAttestationFormat(context.Background(),
+	x5c := att.AttStatement["x5c"].([]interface{})
+	leafDER := x5c[0].([]byte)
+	leaf := mustParseCert(t, leafDER)
+	got, err := doAndroidKeyAttestationFormatAt(context.Background(),
 		mustAttestationProvisioner(t, rootPEM),
 		&Challenge{Token: "homelab-test-token"},
 		jwk,
-		&att)
+		&att,
+		attestationFixtureTime(t, x5c))
 	require.NoError(t, err)
 
-	leafDER := att.AttStatement["x5c"].([]interface{})[0].([]byte)
-	expectedFP, err := keyutil.Fingerprint(mustParseCert(t, leafDER).PublicKey)
+	expectedFP, err := keyutil.Fingerprint(leaf.PublicKey)
 	require.NoError(t, err)
 	require.Equal(t, expectedFP, got.Fingerprint)
 	require.Equal(t, "StrongBox", got.SecurityLevel)
@@ -507,8 +532,9 @@ func TestDoAndroidKeyAttestationFormat_googleChainFixture(t *testing.T) {
 		require.NotNil(t, block)
 		return block.Bytes
 	}
+	leafDER := readDER("testdata/android-key-leaf.pem")
 	x5c := []interface{}{
-		readDER("testdata/android-key-leaf.pem"),
+		leafDER,
 		readDER("testdata/android-key-chain-1.pem"),
 		readDER("testdata/android-key-chain-2.pem"),
 		readDER("testdata/android-key-chain-3.pem"),
@@ -517,7 +543,7 @@ func TestDoAndroidKeyAttestationFormat_googleChainFixture(t *testing.T) {
 	jwk, err := jose.GenerateJWK("EC", "P-256", "ES256", "sig", "", 0)
 	require.NoError(t, err)
 
-	_, err = doAndroidKeyAttestationFormat(context.Background(),
+	_, err = doAndroidKeyAttestationFormatAt(context.Background(),
 		mustAttestationProvisioner(t, rootPEM),
 		&Challenge{Token: "token"},
 		jwk,
@@ -528,7 +554,8 @@ func TestDoAndroidKeyAttestationFormat_googleChainFixture(t *testing.T) {
 				"alg": int64(-7),
 				"sig": []byte{0x30, 0x00}, // structurally fine, cryptographically wrong
 			},
-		})
+		},
+		attestationFixtureTime(t, x5c))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to validate signature",
 		"validation must reach the signature check on real fixture data, got: %v", err)
